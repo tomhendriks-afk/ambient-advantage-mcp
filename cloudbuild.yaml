@@ -1,0 +1,52 @@
+# Cloud Build config — builds the Docker image and deploys to Cloud Run.
+# Triggered on push to main via the GitHub connection.
+#
+# NOTE (2026-05-10): PLACEHOLDER. This file is not yet wired up to a Cloud
+# Build trigger. Step 9 of the build plan will finalise the env vars, the
+# Artifact Registry path, and the deploy flags. Do not enable the trigger
+# until that step is complete.
+
+steps:
+  # 1. Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'
+      - '.'
+
+  # 2. Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'
+
+  # 3. Deploy to Cloud Run
+  #
+  # The --set-env-vars block below makes this file the single source of truth
+  # for the Cloud Run env block, matching the cloud-run-podcast pattern.
+  # TODO(step 9): confirm PUBLIC_BASE_URLS values and CACHE_TTL_SECONDS before
+  # enabling the build trigger.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'ambient-advantage-mcp'
+      - '--image=northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'
+      - '--region=northamerica-northeast2'
+      - '--platform=managed'
+      - '--quiet'
+      - '--allow-unauthenticated'
+      - '--cpu=0.5'
+      - '--memory=512Mi'
+      - '--min-instances=0'
+      - '--max-instances=5'
+      - '--concurrency=80'
+      - '--set-env-vars=MCP_ENABLED=false,CACHE_TTL_SECONDS=300,PUBLIC_BASE_BRIEFING=https://briefing.ambient-advantage.ai,PUBLIC_BASE_TAKE=https://take.ambient-advantage.ai,PUBLIC_BASE_PODCAST=https://podcast.ambient-advantage.ai,PUBLIC_BASE_BUILD=https://build.ambient-advantage.ai'
+
+images:
+  - 'northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
