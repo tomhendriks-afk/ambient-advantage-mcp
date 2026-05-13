@@ -28,6 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Literal
 
+from .. import cache
 from ..config import get_settings
 from ._http import get_client
 
@@ -108,22 +109,44 @@ def _parse_meta(entry: dict, base: str) -> PostMeta:
     )
 
 
-async def list_posts(*, limit: int | None = None) -> list[PostMeta]:
-    """Fetch posts.json and return parsed metadata.
-
-    The upstream feed is sorted newest-first; we preserve that order.
-    """
+async def _fetch_index_json() -> list[dict]:
     settings = get_settings()
     base = settings.public_base_build
     client = await get_client()
     response = await client.get(f"{base}/posts.json")
     response.raise_for_status()
-    raw = response.json()
+    return response.json()
+
+
+async def list_posts(*, limit: int | None = None) -> list[PostMeta]:
+    """Fetch posts.json and return parsed metadata.
+
+    The upstream feed is sorted newest-first; we preserve that order.
+    Backed by the TTL cache (INDEX_TTL_SECONDS).
+    """
+    settings = get_settings()
+    base = settings.public_base_build
+    raw = await cache.get_or_fetch(
+        key="build_log.list",
+        ttl_seconds=cache.INDEX_TTL_SECONDS,
+        fetch=_fetch_index_json,
+    )
 
     result = [_parse_meta(entry, base) for entry in raw]
     if limit is not None:
         result = result[:limit]
     return result
+
+
+async def _fetch_body(slug: str) -> tuple[str, str]:
+    settings = get_settings()
+    base = settings.public_base_build
+    client = await get_client()
+    response = await client.get(f"{base}/{slug}.md")
+    content_type = response.headers.get("content-type", "").lower()
+    if response.status_code == 200 and "text/markdown" in content_type:
+        return response.text, "markdown"
+    return "", "unavailable"
 
 
 async def get_post(slug: str) -> PostFull | None:
@@ -133,33 +156,19 @@ async def get_post(slug: str) -> PostFull | None:
     Returns PostFull with body_format="unavailable" when the slug is
     indexed but no .md twin is reachable (transient Cloudflare SPA
     fallback, or a post whose .md was never produced).
+
+    The body fetch is cached for ARTICLE_TTL_SECONDS.
     """
-    settings = get_settings()
-    base = settings.public_base_build
     metas = await list_posts()
     meta = next((m for m in metas if m.slug == slug), None)
     if meta is None:
         return None
 
-    client = await get_client()
-    response = await client.get(f"{base}/{slug}.md")
-    content_type = response.headers.get("content-type", "").lower()
-    if response.status_code == 200 and "text/markdown" in content_type:
-        return PostFull(
-            slug=meta.slug,
-            title=meta.title,
-            tag=meta.tag,
-            tags=meta.tags,
-            date=meta.date,
-            date_display=meta.date_display,
-            read_time=meta.read_time,
-            read_time_display=meta.read_time_display,
-            excerpt=meta.excerpt,
-            pinned=meta.pinned,
-            source_url=meta.source_url,
-            body_markdown=response.text,
-            body_format="markdown",
-        )
+    body_markdown, body_format = await cache.get_or_fetch(
+        key=f"build_log.body:{slug}",
+        ttl_seconds=cache.ARTICLE_TTL_SECONDS,
+        fetch=lambda: _fetch_body(slug),
+    )
 
     return PostFull(
         slug=meta.slug,
@@ -173,8 +182,8 @@ async def get_post(slug: str) -> PostFull | None:
         excerpt=meta.excerpt,
         pinned=meta.pinned,
         source_url=meta.source_url,
-        body_markdown="",
-        body_format="unavailable",
+        body_markdown=body_markdown,
+        body_format=body_format,  # type: ignore[arg-type]
     )
 
 

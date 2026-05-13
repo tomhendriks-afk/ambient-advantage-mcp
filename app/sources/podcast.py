@@ -30,6 +30,7 @@ from email.utils import parsedate_to_datetime
 from typing import Literal
 from xml.etree import ElementTree as ET
 
+from .. import cache
 from ..config import get_settings
 from ._http import get_client
 
@@ -165,23 +166,46 @@ def _parse_item(item: ET.Element, base: str) -> EpisodeMeta:
     )
 
 
-async def list_episodes(*, limit: int | None = None) -> list[EpisodeMeta]:
-    """Fetch feed.xml and return parsed metadata.
-
-    The upstream feed is sorted newest-first; we preserve that order.
-    """
+async def _fetch_feed_xml() -> str:
     settings = get_settings()
     base = settings.public_base_podcast
     client = await get_client()
     response = await client.get(f"{base}/feed.xml")
     response.raise_for_status()
+    return response.text
 
-    root = ET.fromstring(response.text)
+
+async def list_episodes(*, limit: int | None = None) -> list[EpisodeMeta]:
+    """Fetch feed.xml and return parsed metadata.
+
+    The upstream feed is sorted newest-first; we preserve that order.
+    Backed by the TTL cache (INDEX_TTL_SECONDS).
+    """
+    settings = get_settings()
+    base = settings.public_base_podcast
+    xml_text = await cache.get_or_fetch(
+        key="podcast.list",
+        ttl_seconds=cache.INDEX_TTL_SECONDS,
+        fetch=_fetch_feed_xml,
+    )
+
+    root = ET.fromstring(xml_text)
     items = root.findall(".//channel/item")
     result = [_parse_item(item, base) for item in items]
     if limit is not None:
         result = result[:limit]
     return result
+
+
+async def _fetch_transcript(date: str) -> tuple[str, str]:
+    settings = get_settings()
+    base = settings.public_base_podcast
+    client = await get_client()
+    response = await client.get(f"{base}/transcripts/{date}.md")
+    content_type = response.headers.get("content-type", "").lower()
+    if response.status_code == 200 and "text/markdown" in content_type:
+        return response.text, "markdown"
+    return "", "unavailable"
 
 
 async def get_episode(date: str) -> EpisodeFull | None:
@@ -190,29 +214,19 @@ async def get_episode(date: str) -> EpisodeFull | None:
     Returns None when the date is not present in the feed.
     Returns EpisodeFull with transcript_format="unavailable" when the
     episode is indexed but no transcript .md is reachable.
+
+    The transcript fetch is cached for ARTICLE_TTL_SECONDS.
     """
-    settings = get_settings()
-    base = settings.public_base_podcast
     metas = await list_episodes()
     meta = next((m for m in metas if m.date == date), None)
     if meta is None:
         return None
 
-    client = await get_client()
-    response = await client.get(f"{base}/transcripts/{date}.md")
-    content_type = response.headers.get("content-type", "").lower()
-    if response.status_code == 200 and "text/markdown" in content_type:
-        return EpisodeFull(
-            date=meta.date,
-            title=meta.title,
-            description=meta.description,
-            audio_url=meta.audio_url,
-            duration_seconds=meta.duration_seconds,
-            guid=meta.guid,
-            source_url=meta.source_url,
-            transcript_markdown=response.text,
-            transcript_format="markdown",
-        )
+    transcript_markdown, transcript_format = await cache.get_or_fetch(
+        key=f"podcast.transcript:{date}",
+        ttl_seconds=cache.ARTICLE_TTL_SECONDS,
+        fetch=lambda: _fetch_transcript(date),
+    )
 
     return EpisodeFull(
         date=meta.date,
@@ -222,6 +236,6 @@ async def get_episode(date: str) -> EpisodeFull | None:
         duration_seconds=meta.duration_seconds,
         guid=meta.guid,
         source_url=meta.source_url,
-        transcript_markdown="",
-        transcript_format="unavailable",
+        transcript_markdown=transcript_markdown,
+        transcript_format=transcript_format,  # type: ignore[arg-type]
     )

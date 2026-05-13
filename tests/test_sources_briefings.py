@@ -11,8 +11,17 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
+from app import cache
 from app.sources import _http, briefings
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache():
+    cache.clear()
+    yield
+    cache.clear()
 
 
 FIXTURE_BRIEFINGS_JSON = [

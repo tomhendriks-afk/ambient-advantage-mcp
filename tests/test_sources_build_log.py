@@ -5,8 +5,17 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import pytest
 
+from app import cache
 from app.sources import _http, build_log
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache():
+    cache.clear()
+    yield
+    cache.clear()
 
 
 FIXTURE_POSTS_JSON = [

@@ -26,6 +26,7 @@ import html
 from dataclasses import dataclass
 from typing import Literal
 
+from .. import cache
 from ..config import get_settings
 from ._http import get_client
 
@@ -80,22 +81,51 @@ def _parse_meta(entry: dict, base: str) -> BriefingMeta:
     )
 
 
-async def list_briefings(*, limit: int | None = None) -> list[BriefingMeta]:
-    """Fetch briefings.json and return parsed, unescaped metadata.
-
-    The upstream feed is already sorted newest-first; we preserve that order.
-    """
+async def _fetch_index_json() -> list[dict]:
     settings = get_settings()
     base = settings.public_base_briefing
     client = await get_client()
     response = await client.get(f"{base}/briefings.json")
     response.raise_for_status()
-    raw = response.json()
+    return response.json()
+
+
+async def list_briefings(*, limit: int | None = None) -> list[BriefingMeta]:
+    """Fetch briefings.json and return parsed, unescaped metadata.
+
+    The upstream feed is already sorted newest-first; we preserve that order.
+    Backed by the TTL cache (INDEX_TTL_SECONDS) so repeated calls within
+    the TTL window don't re-fetch.
+    """
+    settings = get_settings()
+    base = settings.public_base_briefing
+    raw = await cache.get_or_fetch(
+        key="briefings.list",
+        ttl_seconds=cache.INDEX_TTL_SECONDS,
+        fetch=_fetch_index_json,
+    )
 
     result = [_parse_meta(entry, base) for entry in raw]
     if limit is not None:
         result = result[:limit]
     return result
+
+
+async def _fetch_body(date: str) -> tuple[str, str]:
+    """Fetch one briefing's .md twin. Returns (body_markdown, body_format).
+
+    body_format is "markdown" iff the response is HTTP 200 with text/markdown
+    content-type; anything else (Cloudflare SPA fallback, 404, …) returns
+    ("", "unavailable").
+    """
+    settings = get_settings()
+    base = settings.public_base_briefing
+    client = await get_client()
+    response = await client.get(f"{base}/{date}.md")
+    content_type = response.headers.get("content-type", "").lower()
+    if response.status_code == 200 and "text/markdown" in content_type:
+        return response.text, "markdown"
+    return "", "unavailable"
 
 
 async def get_briefing(date: str) -> BriefingFull | None:
@@ -105,27 +135,20 @@ async def get_briefing(date: str) -> BriefingFull | None:
     Returns BriefingFull with body_format="unavailable" when the date is
     indexed but no .md twin is reachable (older dates without source data,
     or a transient upstream gap).
+
+    The body fetch is cached for ARTICLE_TTL_SECONDS — bodies don't change
+    once published, so we can afford a longer TTL than the index.
     """
-    settings = get_settings()
-    base = settings.public_base_briefing
     metas = await list_briefings()
     meta = next((m for m in metas if m.date == date), None)
     if meta is None:
         return None
 
-    client = await get_client()
-    response = await client.get(f"{base}/{date}.md")
-    content_type = response.headers.get("content-type", "").lower()
-    if response.status_code == 200 and "text/markdown" in content_type:
-        return BriefingFull(
-            date=meta.date,
-            headline=meta.headline,
-            snippet=meta.snippet,
-            read_time=meta.read_time,
-            source_url=meta.source_url,
-            body_markdown=response.text,
-            body_format="markdown",
-        )
+    body_markdown, body_format = await cache.get_or_fetch(
+        key=f"briefings.body:{date}",
+        ttl_seconds=cache.ARTICLE_TTL_SECONDS,
+        fetch=lambda: _fetch_body(date),
+    )
 
     return BriefingFull(
         date=meta.date,
@@ -133,6 +156,6 @@ async def get_briefing(date: str) -> BriefingFull | None:
         snippet=meta.snippet,
         read_time=meta.read_time,
         source_url=meta.source_url,
-        body_markdown="",
-        body_format="unavailable",
+        body_markdown=body_markdown,
+        body_format=body_format,  # type: ignore[arg-type]
     )

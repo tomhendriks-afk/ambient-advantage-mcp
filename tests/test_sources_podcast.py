@@ -7,7 +7,15 @@ import asyncio
 import httpx
 import pytest
 
+from app import cache
 from app.sources import _http, podcast
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache():
+    cache.clear()
+    yield
+    cache.clear()
 
 
 FIXTURE_FEED_XML = """\
