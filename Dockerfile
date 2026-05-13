@@ -7,10 +7,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv
 
+# requirements.txt copied first so changes to app/ don't bust the
+# pip-install layer cache.
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY app ./app
+
+# Drop root: defense in depth. The MCP server is read-only and makes no
+# filesystem writes, so a non-privileged user is sufficient. Port 8080
+# doesn't need root (it's > 1024).
+RUN useradd --create-home --shell /bin/false appuser \
+    && chown -R appuser:appuser /srv
+USER appuser
 
 # Cloud Run injects $PORT (default 8080). uvicorn binds to it.
 ENV PORT=8080
