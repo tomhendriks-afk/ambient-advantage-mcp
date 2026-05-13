@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from . import schemas
+from . import schemas, search
 from .sources import briefings, build_log, podcast, takes
 from .tool_logging import tool_call_logger
 
@@ -210,12 +210,203 @@ async def list_build_log_components() -> list[schemas.ComponentSummaryModel]:
         return [schemas.ComponentSummaryModel.model_validate(c) for c in components]
 
 
-def register_tools(server: FastMCP) -> None:
-    """Register every public tool on the given FastMCP instance.
+# --------------------------------------------------------------------------- #
+# Search tools                                                                #
+# --------------------------------------------------------------------------- #
 
-    Step 6b lands the 8 read-only get/list tools. Step 6c will add the
-    4 search + (deferred) topics tools.
+def _in_range(date: str, date_from: str | None, date_to: str | None) -> bool:
+    """ISO YYYY-MM-DD dates compare correctly as strings."""
+    if date_from and date < date_from:
+        return False
+    if date_to and date > date_to:
+        return False
+    return True
+
+
+async def search_briefings(
+    query: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 10,
+) -> list[schemas.BriefingSearchHit]:
+    """Search briefings by headline and snippet.
+
+    Inputs:
+      - query: search terms; AND semantics (all terms must appear).
+      - date_from / date_to: optional YYYY-MM-DD bounds (inclusive).
+      - limit: max hits to return (default 10).
+
+    Returns hits sorted by relevance score desc, then publish date desc.
+    Phase 1 matches on title (headline) + snippet from briefings.json;
+    full-body search lands later. source_url cites the canonical HTML
+    page for each hit.
     """
+    async with tool_call_logger("search_briefings", query_len=len(query)) as info:
+        terms = search.tokenize(query)
+        if not terms:
+            info["result_count"] = 0
+            return []
+
+        metas = await briefings.list_briefings()
+        scored: list[tuple[int, list[str], briefings.BriefingMeta]] = []
+        for m in metas:
+            if not _in_range(m.date, date_from, date_to):
+                continue
+            score, matched = search.score_text(f"{m.headline} {m.snippet}", terms)
+            if score > 0:
+                scored.append((score, matched, m))
+
+        # Sort by (score, date) tuple in descending order: highest score
+        # wins; on ties, newer date wins. ISO YYYY-MM-DD compares lexically.
+        scored.sort(key=lambda t: (t[0], t[2].date), reverse=True)
+        scored = scored[:max(0, limit)]
+
+        hits = [
+            schemas.BriefingSearchHit(
+                date=m.date,
+                headline=m.headline,
+                snippet=m.snippet,
+                read_time=m.read_time,
+                source_url=m.source_url,
+                score=score,
+                matched_terms=matched,
+            )
+            for score, matched, m in scored
+        ]
+        info["result_count"] = len(hits)
+        return hits
+
+
+async def list_briefing_topics(
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[schemas.BriefingTopic]:
+    """List distinct topics across briefings in a date range, with counts.
+
+    PHASE 1 STUB: topic extraction requires either a tag taxonomy on the
+    briefings (not currently published) or keyword extraction from
+    headlines (noisy without curation). Phase 1 returns an empty list;
+    the tool is shipped now so the schema is stable when the real
+    implementation lands.
+
+    date_from / date_to are accepted for forward compatibility but
+    currently ignored.
+    """
+    async with tool_call_logger("list_briefing_topics") as info:
+        # date_from/date_to deliberately unused in Phase 1; the parameters
+        # are part of the locked schema for the eventual real implementation.
+        _ = (date_from, date_to)
+        info["result_count"] = 0
+        return []
+
+
+async def search_chiels_take(
+    query: str,
+    limit: int = 10,
+) -> list[schemas.TakeSearchHit]:
+    """Search Chiel's Take opinion pieces by title and excerpt.
+
+    Inputs:
+      - query: search terms; AND semantics.
+      - limit: max hits to return (default 10).
+
+    Sorted by relevance score desc, then date desc. Title + excerpt
+    matching only; full-body search lands later.
+    """
+    async with tool_call_logger("search_chiels_take", query_len=len(query)) as info:
+        terms = search.tokenize(query)
+        if not terms:
+            info["result_count"] = 0
+            return []
+
+        metas = await takes.list_takes()
+        scored: list[tuple[int, list[str], takes.TakeMeta]] = []
+        for m in metas:
+            score, matched = search.score_text(f"{m.title} {m.excerpt}", terms)
+            if score > 0:
+                scored.append((score, matched, m))
+
+        scored.sort(key=lambda t: (t[0], t[2].date), reverse=True)
+        scored = scored[:max(0, limit)]
+
+        hits = [
+            schemas.TakeSearchHit(
+                slug=m.slug,
+                title=m.title,
+                tag=m.tag,
+                date=m.date,
+                date_display=m.date_display,
+                read_time=m.read_time,
+                excerpt=m.excerpt,
+                featured=m.featured,
+                source_url=m.source_url,
+                score=score,
+                matched_terms=matched,
+            )
+            for score, matched, m in scored
+        ]
+        info["result_count"] = len(hits)
+        return hits
+
+
+async def search_build_log(
+    query: str,
+    tag: str | None = None,
+    limit: int = 10,
+) -> list[schemas.PostSearchHit]:
+    """Search Build Log posts by title and excerpt, optionally tag-filtered.
+
+    Inputs:
+      - query: search terms; AND semantics.
+      - tag: optional tag slug to filter on (e.g. "cloud-run", "firestore").
+        If supplied, only posts carrying that tag are considered before
+        scoring the query.
+      - limit: max hits to return (default 10).
+
+    Sorted by relevance score desc, then date desc.
+    """
+    async with tool_call_logger("search_build_log", query_len=len(query)) as info:
+        terms = search.tokenize(query)
+        if not terms:
+            info["result_count"] = 0
+            return []
+
+        metas = await build_log.list_posts()
+        scored: list[tuple[int, list[str], build_log.PostMeta]] = []
+        for m in metas:
+            if tag is not None and tag not in m.tags:
+                continue
+            score, matched = search.score_text(f"{m.title} {m.excerpt}", terms)
+            if score > 0:
+                scored.append((score, matched, m))
+
+        scored.sort(key=lambda t: (t[0], t[2].date), reverse=True)
+        scored = scored[:max(0, limit)]
+
+        hits = [
+            schemas.PostSearchHit(
+                slug=m.slug,
+                title=m.title,
+                tag=m.tag,
+                tags=list(m.tags),
+                date=m.date,
+                date_display=m.date_display,
+                read_time=m.read_time,
+                read_time_display=m.read_time_display,
+                excerpt=m.excerpt,
+                pinned=m.pinned,
+                source_url=m.source_url,
+                score=score,
+                matched_terms=matched,
+            )
+            for score, matched, m in scored
+        ]
+        info["result_count"] = len(hits)
+        return hits
+
+
+def register_tools(server: FastMCP) -> None:
+    """Register every public tool on the given FastMCP instance."""
     server.add_tool(get_latest_briefing)
     server.add_tool(get_briefing_by_date)
     server.add_tool(get_chiels_take)
@@ -224,3 +415,7 @@ def register_tools(server: FastMCP) -> None:
     server.add_tool(list_podcast_episodes)
     server.add_tool(get_build_log_post)
     server.add_tool(list_build_log_components)
+    server.add_tool(search_briefings)
+    server.add_tool(list_briefing_topics)
+    server.add_tool(search_chiels_take)
+    server.add_tool(search_build_log)

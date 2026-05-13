@@ -196,3 +196,69 @@ class ComponentSummaryModel(_MCPModel):
     post_count: int
     post_slugs: list[str]
     schema_version: Literal["v1"] = SCHEMA_VERSION
+
+
+# --------------------------------------------------------------------------- #
+# Search hit shapes — extend the meta models with relevance fields            #
+# --------------------------------------------------------------------------- #
+
+class BriefingSearchHit(_MCPModel):
+    """A briefing matched by search_briefings, scored against the query."""
+
+    date: str
+    headline: str
+    snippet: str
+    read_time: int
+    source_url: str
+    score: int
+    matched_terms: list[str]
+    schema_version: Literal["v1"] = SCHEMA_VERSION
+
+
+class TakeSearchHit(_MCPModel):
+    """A take matched by search_chiels_take, scored against the query."""
+
+    slug: str
+    title: str
+    tag: str
+    date: str
+    date_display: str
+    read_time: str
+    excerpt: str
+    featured: bool
+    source_url: str
+    score: int
+    matched_terms: list[str]
+    schema_version: Literal["v1"] = SCHEMA_VERSION
+
+
+class PostSearchHit(_MCPModel):
+    """A Build Log post matched by search_build_log, scored against the query."""
+
+    slug: str
+    title: str
+    tag: str
+    tags: list[str]
+    date: str
+    date_display: str
+    read_time: str
+    read_time_display: str
+    excerpt: str
+    pinned: bool
+    source_url: str
+    score: int
+    matched_terms: list[str]
+    schema_version: Literal["v1"] = SCHEMA_VERSION
+
+
+class BriefingTopic(_MCPModel):
+    """A distinct topic across briefings with its occurrence count.
+
+    PHASE 1 STUB: list_briefing_topics returns an empty list; this model
+    is shipped so the tool's published JSON Schema is stable across the
+    eventual switch from stub to real implementation.
+    """
+
+    topic: str
+    count: int
+    schema_version: Literal["v1"] = SCHEMA_VERSION
