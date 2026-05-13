@@ -27,6 +27,7 @@ from fastapi import FastAPI
 
 from .config import Settings, get_settings
 from .mcp_server import SCHEMA_VERSION, build_mcp_server
+from .sources._http import aclose_client
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -52,11 +53,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        if mcp_app is None:
-            yield
-            return
-        async with mcp_app.router.lifespan_context(_app):
-            yield
+        try:
+            if mcp_app is None:
+                yield
+            else:
+                async with mcp_app.router.lifespan_context(_app):
+                    yield
+        finally:
+            # Close the shared httpx.AsyncClient singleton used by the
+            # source adapters so the connection pool releases cleanly
+            # on shutdown. No-op if the client was never created.
+            await aclose_client()
 
     app = FastAPI(title="Ambient Advantage MCP Server", lifespan=lifespan)
 
