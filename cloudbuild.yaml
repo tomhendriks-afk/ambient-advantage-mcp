@@ -1,10 +1,24 @@
 # Cloud Build config — builds the Docker image and deploys to Cloud Run.
-# Triggered on push to main via the GitHub connection.
 #
-# NOTE (2026-05-10): PLACEHOLDER. This file is not yet wired up to a Cloud
-# Build trigger. Step 9 of the build plan will finalise the env vars, the
-# Artifact Registry path, and the deploy flags. Do not enable the trigger
-# until that step is complete.
+# Triggered by a push to main once the GitHub trigger is wired in step 10.
+# Until that trigger exists, this file is committed but inert.
+#
+# The --set-env-vars block below is the single source of truth for the
+# Cloud Run env block (same pattern as cloud-run-podcast/cloudbuild.yaml).
+# Edit here to change a variable; ad-hoc
+#   `gcloud run services update --set-env-vars=...`
+# calls REPLACE the entire env list and can silently truncate it.
+#
+# MCP_ENABLED defaults to false so the first deployed revision is the
+# inert /health + / shell. Flip to true after step 12 (MCP Inspector
+# smoke test) confirms the /mcp/ endpoint behaves correctly on the
+# deployed URL.
+#
+# TODO (follow-up after step 12): replace the default Compute Engine
+# service account with a dedicated --service-account=
+# ambient-advantage-mcp-runtime@... that has zero IAM permissions.
+# Phase 1 reads only public URLs, so a zero-perm SA shrinks the
+# attack surface to nothing.
 
 steps:
   # 1. Build the Docker image
@@ -22,11 +36,6 @@ steps:
       - 'northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'
 
   # 3. Deploy to Cloud Run
-  #
-  # The --set-env-vars block below makes this file the single source of truth
-  # for the Cloud Run env block, matching the cloud-run-podcast pattern.
-  # TODO(step 9): confirm PUBLIC_BASE_URLS values and CACHE_TTL_SECONDS before
-  # enabling the build trigger.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
@@ -38,12 +47,13 @@ steps:
       - '--platform=managed'
       - '--quiet'
       - '--allow-unauthenticated'
+      - '--port=8080'
       - '--cpu=0.5'
       - '--memory=512Mi'
       - '--min-instances=0'
       - '--max-instances=5'
       - '--concurrency=80'
-      - '--set-env-vars=MCP_ENABLED=false,CACHE_TTL_SECONDS=300,PUBLIC_BASE_BRIEFING=https://briefing.ambient-advantage.ai,PUBLIC_BASE_TAKE=https://take.ambient-advantage.ai,PUBLIC_BASE_PODCAST=https://podcast.ambient-advantage.ai,PUBLIC_BASE_BUILD=https://build.ambient-advantage.ai'
+      - '--set-env-vars=MCP_ENABLED=false,PUBLIC_BASE_BRIEFING=https://briefing.ambient-advantage.ai,PUBLIC_BASE_TAKE=https://take.ambient-advantage.ai,PUBLIC_BASE_PODCAST=https://podcast.ambient-advantage.ai,PUBLIC_BASE_BUILD=https://build.ambient-advantage.ai'
 
 images:
   - 'northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'

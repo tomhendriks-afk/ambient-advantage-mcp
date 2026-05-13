@@ -19,12 +19,10 @@ class Settings:
     # a half-finished surface.
     mcp_enabled: bool
 
-    # Default TTL for cached upstream fetches. Index feeds use this value;
-    # article bodies override to a longer TTL inside the cache layer.
-    cache_ttl_seconds: int
-
     # Public base URLs for the four content sites. Adapters in app/sources/
-    # use these to compose feed and per-article URLs.
+    # use these to compose feed and per-article URLs. TTLs are NOT a
+    # setting; they're locked constants in app.cache (INDEX_TTL_SECONDS,
+    # ARTICLE_TTL_SECONDS) so a config drift can't silently weaken caching.
     public_base_briefing: str
     public_base_take: str
     public_base_podcast: str
@@ -42,7 +40,6 @@ def _env_bool(name: str, default: bool) -> bool:
 def get_settings() -> Settings:
     return Settings(
         mcp_enabled=_env_bool("MCP_ENABLED", False),
-        cache_ttl_seconds=int(os.environ.get("CACHE_TTL_SECONDS", "300")),
         public_base_briefing=os.environ.get(
             "PUBLIC_BASE_BRIEFING", "https://briefing.ambient-advantage.ai"
         ).rstrip("/"),
