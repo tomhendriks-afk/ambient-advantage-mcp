@@ -48,7 +48,12 @@ steps:
       - '--quiet'
       - '--allow-unauthenticated'
       - '--port=8080'
-      - '--cpu=0.5'
+      # cpu=1 (not 0.5) because Cloud Run rejects cpu < 1 alongside
+      # concurrency > 1, and we want concurrency=80 so the async stack
+      # (httpx + asyncio) can multiplex MCP tool calls within an instance.
+      # Cost stays effectively zero at idle (scale-to-zero); the bump only
+      # matters when actively serving requests.
+      - '--cpu=1'
       - '--memory=512Mi'
       - '--min-instances=0'
       - '--max-instances=5'
