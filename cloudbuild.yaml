@@ -9,10 +9,10 @@
 #   `gcloud run services update --set-env-vars=...`
 # calls REPLACE the entire env list and can silently truncate it.
 #
-# MCP_ENABLED defaults to false so the first deployed revision is the
-# inert /health + / shell. Flip to true after step 12 (MCP Inspector
-# smoke test) confirms the /mcp/ endpoint behaves correctly on the
-# deployed URL.
+# MCP_ENABLED is now true: the 12 Phase 1 tools are mounted at /mcp/.
+# The inert-shell phase (steps 1-11) is complete; step 12 enables the
+# transport and smoke-tests it via MCP Inspector against the deployed
+# URL.
 #
 # TODO (follow-up after step 12): replace the default Compute Engine
 # service account with a dedicated --service-account=
@@ -58,7 +58,7 @@ steps:
       - '--min-instances=0'
       - '--max-instances=5'
       - '--concurrency=80'
-      - '--set-env-vars=MCP_ENABLED=false,PUBLIC_BASE_BRIEFING=https://briefing.ambient-advantage.ai,PUBLIC_BASE_TAKE=https://take.ambient-advantage.ai,PUBLIC_BASE_PODCAST=https://podcast.ambient-advantage.ai,PUBLIC_BASE_BUILD=https://build.ambient-advantage.ai'
+      - '--set-env-vars=MCP_ENABLED=true,PUBLIC_BASE_BRIEFING=https://briefing.ambient-advantage.ai,PUBLIC_BASE_TAKE=https://take.ambient-advantage.ai,PUBLIC_BASE_PODCAST=https://podcast.ambient-advantage.ai,PUBLIC_BASE_BUILD=https://build.ambient-advantage.ai'
 
 images:
   - 'northamerica-northeast2-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/ambient-advantage-mcp:$SHORT_SHA'
