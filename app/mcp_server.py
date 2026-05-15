@@ -22,6 +22,7 @@ remind the agent that every response carries source_url for citation.
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import schemas, search
 from .sources import briefings, build_log, podcast, takes
@@ -46,11 +47,26 @@ def build_mcp_server() -> FastMCP:
 
     streamable_http_path is set to "/" so that mounting the sub-app under
     "/mcp" on the parent FastAPI app produces a public endpoint of "/mcp/".
+
+    DNS-rebinding protection is disabled deliberately. The SDK enables it
+    by default with an empty allowed_hosts list, which rejects every
+    non-localhost Host header with HTTP 421 ("Invalid Host header"). That
+    protection exists to stop a malicious web page from driving a
+    localhost/dev MCP server via DNS rebinding. This server is the
+    opposite shape: public-internet by design (agents must reach it),
+    read-only over already-public content, and reached through Firebase
+    Hosting → Cloud Run where the Host header is the proxy's and not
+    stable. There is no localhost/intranet resource it could be rebound
+    onto, so the protection provides no security value here and only
+    breaks legitimate access.
     """
     server = FastMCP(
         name=SERVER_NAME,
         instructions=SERVER_INSTRUCTIONS,
         streamable_http_path="/",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        ),
     )
     register_tools(server)
     return server
